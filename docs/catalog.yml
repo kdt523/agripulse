@@ -1,0 +1,329 @@
+# Single source of truth for Unity Catalog metadata (comments, tags) and docs/DATA_CATALOG.md.
+# Applied by notebooks/50_catalog.py; verified by src/agripulse/quality/catalog_export.py (0 missing comments).
+owner: kd
+
+tables:
+  # ------------------------------------------------------------------ bronze
+  bronze.geo_districts:
+    layer: bronze
+    source: datameet
+    description: Census-2011 district polygons reduced to centroid, area and simplified WKT. One row per district (641).
+    source_url: https://github.com/datameet/maps (website/docs/data/geojson/dists11.geojson)
+    licence: CC BY 4.0 (DataMeet)
+    refresh: static
+    sla: n/a
+    grain: district
+    keys: [district_id]
+    known_issues: Census-2011 boundaries - post-2011 districts and Telangana are not separate; names differ from modern spellings.
+  bronze.weather_daily_raw:
+    layer: bronze
+    source: open_meteo
+    description: Open-Meteo archive (ERA5) daily weather per district centroid, as returned by the API.
+    source_url: https://open-meteo.com/en/docs/historical-weather-api
+    licence: CC BY 4.0 (Open-Meteo, non-commercial free tier)
+    refresh: daily (catch-up job, quota aware)
+    sla: 3 days
+    grain: district x date
+    keys: [district_id, date]
+    known_issues: Free-tier quota (~10k weighted calls/day) limits the backfill; history starts 2026-05-01 plus test slices.
+  bronze.weather_forecast_raw:
+    layer: bronze
+    source: open_meteo
+    description: Open-Meteo 16-day forecast per district, kept per issue date so past forecasts are never overwritten.
+    source_url: https://open-meteo.com/en/docs
+    licence: CC BY 4.0 (Open-Meteo)
+    refresh: daily
+    sla: 1 day
+    grain: district x forecast date x issued date
+    keys: [district_id, date, issued_date]
+    known_issues: none
+  bronze.nasa_power_raw:
+    layer: bronze
+    source: nasa_power
+    description: NASA POWER (MERRA-2 / CERES) daily agro-climate per district centroid. Fill value -999 is kept raw.
+    source_url: https://power.larc.nasa.gov/docs/services/api/temporal/daily/
+    licence: Public domain (NASA)
+    refresh: daily
+    sla: 5 days
+    grain: district x date
+    keys: [district_id, date]
+    known_issues: Publication lag ~4 days; -999 fill values (quarantined in silver); 0.5 degree grid, so mountain districts are smoothed.
+  bronze.mandi_prices_raw:
+    layer: bronze
+    source: agmarknet
+    description: Agmarknet mandi (APMC) daily prices and arrivals per market, variety and grade, raw spellings kept.
+    source_url: https://agmarknet.gov.in (public archive github.com/iancovert/Agmarknet; live API api.data.gov.in resource 9ef84268-d588-465a-a308-a864a43d0070)
+    licence: Government of India open data (NDSAP); archive mirror public on GitHub
+    refresh: static archive 2013-2017 loaded; live API via ADF landing
+    sla: n/a (static archive)
+    grain: market x commodity x variety x grade x date
+    keys: [state, district, market, commodity, variety, grade, arrival_date]
+    known_issues: Archive ends 2017-06; min/modal/max inconsistent in ~7% of rows; district spellings differ from Census names.
+  # ------------------------------------------------------------------ silver
+  silver.districts:
+    layer: silver
+    source: datameet
+    description: Standardised districts (upper-case names, centroid, area).
+    refresh: weekly
+    sla: n/a
+    grain: district
+    keys: [district_id]
+  silver.districts_quarantine:
+    layer: silver
+    source: datameet
+    description: District rows rejected by quality rules, with the failed rule names.
+    refresh: with silver pipeline
+    sla: n/a
+    grain: district
+    keys: [district_id]
+  silver.weather_daily:
+    layer: silver
+    source: open_meteo
+    description: Daily district weather in degC / mm / % / km/h. Open-Meteo preferred, NASA POWER fallback (weather_source). is_forecast marks forecast rows.
+    refresh: daily
+    sla: 3 days
+    grain: district x date x is_forecast
+    keys: [district_id, date]
+    known_issues: et0_mm is NULL for NASA-sourced rows.
+  silver.weather_daily_quarantine:
+    layer: silver
+    source: open_meteo
+    description: Weather rows rejected by quality rules, with the failed rule names.
+    refresh: with silver pipeline
+    sla: n/a
+    grain: district x date
+    keys: [district_id, date]
+  silver.agro_climate_daily:
+    layer: silver
+    source: nasa_power
+    description: NASA POWER daily agro-climate - solar radiation, root/top-zone soil wetness, temperature, precipitation.
+    refresh: daily
+    sla: 5 days
+    grain: district x date
+    keys: [district_id, date]
+  silver.agro_climate_daily_quarantine:
+    layer: silver
+    source: nasa_power
+    description: Agro-climate rows rejected by quality rules (e.g. NASA -999 fill), with failed rule names.
+    refresh: with silver pipeline
+    sla: n/a
+    grain: district x date
+    keys: [district_id, date]
+  silver.mandi_prices_daily:
+    layer: silver
+    source: agmarknet
+    description: Standardised mandi prices (INR/quintal) and arrivals (tonnes), commodity names normalised, district_id via ops.district_name_map.
+    refresh: when new mandi files land
+    sla: n/a (static archive)
+    grain: market x commodity x variety x date
+    keys: [market_id, commodity_std, variety_std, date]
+  silver.mandi_prices_daily_quarantine:
+    layer: silver
+    source: agmarknet
+    description: Mandi rows rejected by quality rules (price order, non-positive price, unmatched district), with failed rule names.
+    refresh: with silver pipeline
+    sla: n/a
+    grain: market x commodity x variety x date
+    keys: [market_id, commodity_std, variety_std, date]
+  silver.dq_duplicate_keys:
+    layer: silver
+    source: agmarknet
+    description: Natural keys appearing more than once in bronze mandi data (uniqueness check; expected empty).
+    refresh: with silver pipeline
+    sla: n/a
+    grain: natural key
+    keys: [state, district, market, commodity, variety, grade, arrival_date]
+  # ------------------------------------------------------------------ gold
+  gold.district_week:
+    layer: gold
+    source: derived
+    description: Feature table for demand forecasting - district x ISO week x commodity with mandi demand proxy, weather, agro-climate, forecast and geo features. Leakage-safe.
+    refresh: daily incremental (weeks since watermark - 8)
+    sla: 1 day after silver
+    grain: district x week x commodity
+    keys: [district_id, week_start, commodity_std]
+    known_issues: et0_sum is NULL where only NASA weather exists; precip_forecast_next_7d only for the current week.
+  gold.district_profile:
+    layer: gold
+    source: derived
+    description: One row per district - long-run climate, soil wetness, price volatility and mandi crop-mix shares for segmentation.
+    refresh: daily
+    sla: 1 day after silver
+    grain: district
+    keys: [district_id]
+  gold.v_ds_training:
+    layer: gold
+    source: derived
+    description: Training view - district_week features at week t plus next-week arrivals and price as targets.
+    refresh: view
+    sla: n/a
+    grain: district x week x commodity
+    keys: [district_id, week_start, commodity_std]
+  # ------------------------------------------------------------------ ops
+  ops.pipeline_runs: {layer: ops, source: internal, description: One row per pipeline run (rows in/out/quarantined, duration, status)., refresh: every run, sla: n/a, grain: run, keys: [run_id]}
+  ops.ingest_watermarks: {layer: ops, source: internal, description: Incremental-load watermarks per source and key (global or per district)., refresh: every ingest, sla: n/a, grain: source x key, keys: [source, key]}
+  ops.freshness_sla: {layer: ops, source: internal, description: Allowed lag in days per source (NULL = static archive)., refresh: manual, sla: n/a, grain: source, keys: [source]}
+  ops.freshness_status: {layer: ops, source: internal, description: History of freshness checks per source., refresh: daily, sla: n/a, grain: source x check time, keys: [source, checked_at]}
+  ops.alert_log: {layer: ops, source: internal, description: Every alert raised (freshness / dq / volume) and whether Slack delivery worked., refresh: on alert, sla: n/a, grain: alert, keys: [alert_ts, source]}
+  ops.dq_scorecard: {layer: ops, source: internal, description: Daily data-quality scorecard per silver table., refresh: daily, sla: n/a, grain: table x date, keys: [table, date]}
+  ops.district_name_map: {layer: ops, source: internal, description: Mandi (state, district) spellings mapped to Census-2011 district_id with match method and score., refresh: when mandi data changes, sla: n/a, grain: source spelling, keys: [src_state, src_district]}
+  # ------------------------------------------------------------------ ml (applied if present)
+  ml.forecast_lift_results: {layer: ml, source: derived, description: Forecast-lift experiment metrics per model, fold and slice., refresh: per experiment, sla: n/a, grain: model x fold x slice, keys: [model, fold, slice]}
+  ml.district_segments: {layer: ml, source: derived, description: KMeans agro-climatic segment per district with profile., refresh: per experiment, sla: n/a, grain: district, keys: [district_id]}
+
+# Shared column dictionary (a table may not need all; every column in a catalogued table must be covered here)
+columns:
+  _ingested_at: UTC time the row was loaded into bronze
+  _request_params: Request window or parameters that produced the row
+  _run_id: Ingest run id (joins to ops.pipeline_runs)
+  _source: Source system label
+  alert_ts: When the alert was raised (UTC)
+  allsky_sfc_sw_dwn: NASA all-sky surface shortwave downward irradiance, MJ/m2/day (-999 = missing)
+  annual_precip_mm: Mean annual rainfall over years with >=330 observed days, mm
+  area_km2: District area, km2
+  arrival_date: Date of the market report
+  arrivals_lag_1w: Arrivals 1 week earlier, tonnes
+  arrivals_lag_2w: Arrivals 2 weeks earlier, tonnes
+  arrivals_lag_4w: Arrivals 4 weeks earlier, tonnes
+  arrivals_lag_52w: Arrivals same week last year, tonnes
+  arrivals_t: Daily market arrivals, tonnes
+  arrivals_t_sum: Weekly mandi arrivals in the district, tonnes (demand proxy)
+  arrivals_tonnes: Daily market arrivals as reported, tonnes
+  breached: True when lag_days exceeds sla_days
+  census_code: Census-2011 district code
+  checked_at: When the freshness check ran (UTC)
+  commodity: Commodity name as reported
+  commodity_share_52w: Share of this commodity in the district's arrivals over the previous 52 weeks
+  commodity_std: Standardised commodity name
+  completeness_pct: Mean non-null percentage over the key columns of passing rows
+  date: Observation date
+  delivered: True when the Slack webhook accepted the alert
+  district: District name as reported by the source
+  district_id: Census-2011 district key (D + 4-digit code)
+  district_name: District name (Census 2011)
+  district_name_std: Upper-case trimmed district name
+  dry_spell_len: Longest run of consecutive dry days (<1 mm) ending in the week
+  duration_s: Wall-clock seconds
+  error: Error message when the run failed
+  et0_fao_evapotranspiration: FAO-56 reference evapotranspiration, mm/day
+  et0_mm: Reference evapotranspiration, mm/day
+  et0_sum: Weekly reference evapotranspiration, mm
+  expected_lag_days: Maximum allowed lag in days (NULL = static archive)
+  fail_rows: Rows quarantined
+  failed_rules: Names of the quality rules the row violated
+  gdd: Growing degree days, base 10 degC
+  geometry_wkt: Simplified district polygon as WKT
+  grade: Commodity grade as reported
+  gwetroot: NASA root-zone soil wetness, 0-1
+  gwettop: NASA surface soil wetness, 0-1
+  heat_days: Days with maximum temperature above 40 degC
+  heat_days_per_year: Mean number of days per year with tmax above 40 degC
+  is_forecast: True for forecast rows
+  issued_date: Date the forecast was issued
+  key: Watermark sub-key (global or district_id)
+  kind: Alert type - freshness, dq or volume
+  lag_days: Days between the check date and the latest data date
+  last_date: Last date successfully ingested
+  lat: Latitude of the district centroid
+  layer: Medallion layer of the run
+  lon: Longitude of the district centroid
+  market: Market (mandi) name as reported
+  market_id: Market key - district_id plus normalised market name
+  max_date: Latest data date found
+  max_price: Maximum price, INR/quintal, as reported
+  max_price_inr_qtl: Maximum price, INR per quintal
+  message: Human-readable alert detail
+  method: How the name was matched - override, exact, fuzzy_state, fuzzy_any_state or unmatched
+  min_price: Minimum price, INR/quintal, as reported
+  min_price_inr_qtl: Minimum price, INR per quintal
+  modal_price: Modal price, INR/quintal, as reported
+  modal_price_avg: Weekly mean modal price, INR per quintal
+  modal_price_inr_qtl: Modal price, INR per quintal
+  n_markets: Distinct markets reporting in the week
+  owner: Feed owner
+  pass_rate: Share of rows passing all hard rules
+  pass_rows: Rows that passed all hard rules
+  precip_anomaly: Weekly rainfall minus same-week mean of the previous 5 years, mm
+  precip_cv: Coefficient of variation of annual rainfall
+  precip_forecast_next_7d: Forecast rainfall for the 7 days after the build date, mm
+  precip_mm: Precipitation, mm
+  precip_sum_28d: Rainfall over this and the previous 3 weeks, mm
+  precip_sum_7d: Rainfall in the week, mm
+  precipitation_sum: Daily precipitation total, mm
+  prectotcorr: NASA bias-corrected daily precipitation, mm
+  price_lag_1w: Modal price 1 week earlier, INR/quintal
+  price_lag_2w: Modal price 2 weeks earlier, INR/quintal
+  price_lag_4w: Modal price 4 weeks earlier, INR/quintal
+  price_lag_52w: Modal price same week last year, INR/quintal
+  price_volatility_4w: Standard deviation of weekly modal price over 4 weeks, INR/quintal
+  price_volatility_cv: Mean coefficient of variation of weekly modal price across commodities
+  rain_sum: Daily rain total, mm
+  relative_humidity_2m_mean: Mean relative humidity at 2 m, percent
+  rh2m: NASA relative humidity at 2 m, percent
+  rh_pct: Relative humidity, percent
+  rolling_median_price: Median modal price over the previous 30 observations of the same market, commodity and variety
+  rows: Total rows before filtering
+  rows_in: Rows read or fetched
+  rows_out: Rows written
+  rows_quarantined: Rows routed to quarantine
+  rules_failed: Quarantined rows per failed rule
+  run_id: Unique run id
+  score: Fuzzy-match score 0-100
+  season: Cropping season - kharif Jun-Oct, rabi Nov-Mar, zaid Apr-May
+  share_maize: Maize share of the district's mandi arrivals
+  share_moong: Green gram share of the district's mandi arrivals
+  share_rice: Rice share of the district's mandi arrivals
+  share_soybean: Soybean share of the district's mandi arrivals
+  share_tur: Pigeon pea (tur) share of the district's mandi arrivals
+  share_wheat: Wheat share of the district's mandi arrivals
+  sla_days: Allowed lag in days at check time
+  soil_moisture_anomaly: Weekly root-zone wetness minus same-week mean of the previous 5 years
+  soil_wetness_root: Root-zone soil wetness, 0-1
+  soil_wetness_root_avg: Weekly mean root-zone soil wetness, 0-1
+  soil_wetness_root_mean: Long-run mean root-zone soil wetness, 0-1
+  soil_wetness_top: Surface soil wetness, 0-1
+  solar_mj_m2: Solar radiation, MJ/m2/day (-999 = NASA fill value)
+  solar_sum: Weekly solar radiation, MJ/m2
+  source: Data source or pipeline name
+  src_district: District spelling in the mandi source
+  src_state: State spelling in the mandi source
+  started_at: Run start time (UTC)
+  state: State name
+  state_name: State name (Census 2011)
+  state_std: Upper-case trimmed state name
+  status: Run status - success or failed
+  t2m: NASA mean temperature at 2 m, degC
+  t2m_c: Mean temperature at 2 m, degC
+  t2m_max: NASA daily maximum temperature at 2 m, degC
+  t2m_min: NASA daily minimum temperature at 2 m, degC
+  table: Silver table name
+  next_week_arrivals_lag_52w: Arrivals one year before the target week (known at prediction time; the seasonal-naive forecast)
+  target_arrivals_next_week: Next week's arrivals, tonnes (training target)
+  target_price_next_week: Next week's modal price, INR/quintal (training target)
+  temperature_2m_max: Daily maximum temperature at 2 m, degC
+  temperature_2m_min: Daily minimum temperature at 2 m, degC
+  tmax_avg: Mean daily maximum temperature in the week, degC
+  tmax_c: Daily maximum temperature, degC
+  tmax_mean_c: Long-run mean daily maximum temperature, degC
+  tmin_c: Daily minimum temperature, degC
+  updated_at: When the row was last updated (UTC)
+  variety: Commodity variety as reported
+  variety_std: Upper-case trimmed variety
+  weather_source: Which source supplied the row - open_meteo, nasa_power or open_meteo_forecast
+  week_of_year: ISO week number
+  week_start: Monday of the ISO week
+  wind_kmh: Daily maximum wind speed at 10 m, km/h
+  wind_speed_10m_max: Daily maximum wind speed at 10 m, km/h
+  ws10m: NASA wind speed at 10 m, m/s
+  year: Calendar year
+  years_used: Number of years used in the climatology
+  n: Number of times the natural key appears in bronze
+  model: Model name (seasonal_naive, lgbm_market, lgbm_external)
+  fold: Backtest fold id
+  slice: Metric slice (overall, commodity, state)
+  wape: Weighted absolute percentage error
+  mape: Mean absolute percentage error
+  rmse: Root mean squared error
+  n_rows: Rows evaluated
+  segment: KMeans segment id
+  segment_name: Human-readable segment name
