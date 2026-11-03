@@ -3,7 +3,7 @@ import requests
 
 from agripulse.common.config import get_settings
 from agripulse.common.http import HttpClient, RetryableHTTPError
-from agripulse.common.run_logger import RunRecord
+from agripulse.common.runlog import RunRecord
 
 
 class FakeResp:

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     nasa_power_url: str = "https://power.larc.nasa.gov/api/temporal/daily/point"
     agmarknet_url: str = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
     districts_geojson_url: str = (
-        "https://raw.githubusercontent.com/datameet/maps/master/Districts/Census_2011/2011_Dist.json"
+        "https://raw.githubusercontent.com/datameet/maps/master/website/docs/data/geojson/dists11.geojson"
     )
 
     # HTTP behaviour

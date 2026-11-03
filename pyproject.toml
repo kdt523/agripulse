@@ -44,7 +44,7 @@ markers = ["integration: runs on Databricks (deselect locally)"]
 addopts = "-m 'not integration'"
 
 [tool.ruff]
-line-length = 110
+line-length = 130
 target-version = "py310"
 src = ["src", "tests"]
 
@@ -53,3 +53,6 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.coverage.run]
 source = ["src/agripulse"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*" = ["E501", "E402", "F821", "I001"]

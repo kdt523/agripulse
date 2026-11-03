@@ -1,6 +1,37 @@
 # Placeholder job so `bundle validate` has a resource in P0. Replaced in P4 by the full agripulse_daily workflow.
 resources:
   jobs:
+    agripulse_ingest:
+      name: agripulse_ingest_${bundle.target}
+      max_concurrent_runs: 1
+      parameters:
+        - { name: source, default: geo }
+        - { name: mode, default: incremental }
+        - { name: start, default: "" }
+        - { name: end, default: "" }
+        - { name: n_districts, default: "0" }
+        - { name: district_offset, default: "0" }
+        - { name: path, default: "" }
+      tasks:
+        - task_key: ingest
+          timeout_seconds: 14400
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters:
+              catalog: ${var.catalog}
+              source: "{{job.parameters.source}}"
+              mode: "{{job.parameters.mode}}"
+              start: "{{job.parameters.start}}"
+              end: "{{job.parameters.end}}"
+              n_districts: "{{job.parameters.n_districts}}"
+              district_offset: "{{job.parameters.district_offset}}"
+              path: "{{job.parameters.path}}"
+    agripulse_probe:
+      name: agripulse_probe_${bundle.target}
+      tasks:
+        - task_key: probe
+          notebook_task:
+            notebook_path: ../notebooks/01_probe_network.py
     agripulse_setup:
       name: agripulse_setup_${bundle.target}
       tasks:
