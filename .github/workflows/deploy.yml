@@ -1,0 +1,45 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - name: Deploy bundle to dev
+        run: databricks bundle deploy -t dev
+      - name: Integration test (3 districts end to end on Databricks)
+        run: pytest -m integration -o addopts="" tests/integration -q
+      - name: Regenerate the data catalogue and fail if it is stale
+        run: |
+          databricks bundle run agripulse_catalog -t dev --params "write_markdown_to=/Volumes/agripulse/bronze/landing/exports/DATA_CATALOG.md"
+          databricks fs cp dbfs:/Volumes/agripulse/bronze/landing/exports/DATA_CATALOG.md /tmp/DATA_CATALOG.md --overwrite
+          diff -q /tmp/DATA_CATALOG.md docs/DATA_CATALOG.md || (echo "docs/DATA_CATALOG.md is stale: regenerate and commit it" && exit 1)
+
+  deploy-prod:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: production # configure required reviewers on this environment = manual approval gate
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle validate -t prod
+      - run: databricks bundle deploy -t prod
+      # least-privilege grants live in scripts/grants.sql (needs the data_science group; see docs/runbook.md)
