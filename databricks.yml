@@ -1,0 +1,41 @@
+bundle:
+  name: agripulse
+
+variables:
+  catalog:
+    description: Unity Catalog catalog holding all AgriPulse schemas
+    default: agripulse
+  secret_scope:
+    description: Databricks secret scope holding datagov_api_key and slack_webhook
+    default: agripulse
+  alert_webhook_secret:
+    description: Secret key (inside the scope) with the Slack webhook URL
+    default: slack_webhook
+  schedule:
+    description: Quartz cron for the daily job (06:30 IST)
+    default: "0 30 6 * * ?"
+  alert_email:
+    description: Email for job failure notifications
+    default: krushnad523@gmail.com
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      profile: agripulse
+    variables:
+      catalog: agripulse
+
+  prod:
+    mode: production
+    workspace:
+      profile: agripulse
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/prod
+    variables:
+      catalog: agripulse
+    run_as:
+      user_name: ${workspace.current_user.userName}

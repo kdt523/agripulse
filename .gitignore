@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.databricks/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+spark-warehouse/
+metastore_db/
+derby.log
+.env
+airflow/logs/
+airflow/.env

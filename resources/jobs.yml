@@ -1,0 +1,11 @@
+# Placeholder job so `bundle validate` has a resource in P0. Replaced in P4 by the full agripulse_daily workflow.
+resources:
+  jobs:
+    agripulse_setup:
+      name: agripulse_setup_${bundle.target}
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ../notebooks/00_setup.py
+            base_parameters:
+              catalog: ${var.catalog}
