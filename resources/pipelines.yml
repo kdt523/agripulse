@@ -7,10 +7,24 @@ resources:
       schema: silver
       channel: CURRENT
       continuous: false
-      development: true
       libraries:
         - file:
             path: ../pipelines/dlt_silver.py
       configuration:
         agripulse.catalog: ${var.catalog}
+        agripulse.src_path: ${workspace.file_path}/src
+    agripulse_silver_chaos:
+      name: agripulse_silver_chaos_${bundle.target}
+      serverless: true
+      catalog: ${var.catalog}
+      schema: chaos_silver
+      channel: CURRENT
+      continuous: false
+      libraries:
+        - file:
+            path: ../pipelines/dlt_silver.py
+      configuration:
+        agripulse.catalog: ${var.catalog}
+        agripulse.bronze_schema: chaos_bronze
+        agripulse.ops_schema: chaos_ops
         agripulse.src_path: ${workspace.file_path}/src

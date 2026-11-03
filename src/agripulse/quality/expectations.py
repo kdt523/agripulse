@@ -33,6 +33,11 @@ MANDI_RULES = {
     "price_positive": "modal_price_inr_qtl > 0",
     "price_order": "min_price_inr_qtl <= modal_price_inr_qtl AND modal_price_inr_qtl <= max_price_inr_qtl",
     "date_not_future": "date <= current_date()",
+    # hard version of the spike rule: >=50x the trailing median is an entry error, not a market move.
+    # (chaos test: 5/5 injected 100x spikes passed the warn-only rule into silver; 20-49x stays warn-only.)
+    "price_spike_extreme": "rolling_median_price IS NULL OR modal_price_inr_qtl < 50 * rolling_median_price",
+    # 43 archive rows report >100,000 t/day in one market (p99.9 is ~11,400 t): unit/entry errors that corrupt weekly sums
+    "arrivals_plausible": "arrivals_t IS NULL OR (arrivals_t >= 0 AND arrivals_t <= 100000)",
 }
 # warn-only (rows kept, but counted): need a rolling median computed in a view
 MANDI_WARN_RULES = {

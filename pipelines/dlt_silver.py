@@ -32,17 +32,22 @@ from agripulse.quality.expectations import (  # noqa: E402
 from agripulse.transform.standardise import KMH_PER_MS, commodity_map_expr, nasa_null_if_fill, norm_name  # noqa: E402
 
 CATALOG = spark.conf.get("agripulse.catalog", "agripulse")  # noqa: F821
+BRONZE = spark.conf.get("agripulse.bronze_schema", "bronze")  # noqa: F821  (chaos tests point this at a copy)
+OPS = spark.conf.get("agripulse.ops_schema", "ops")  # noqa: F821
 
 
 def bronze(name: str):
-    return spark.read.table(f"{CATALOG}.bronze.{name}")  # noqa: F821
+    return spark.read.table(f"{CATALOG}.{BRONZE}.{name}")  # noqa: F821
 
 
 # ---- schema contract: fail the whole update if bronze drifted ------------------------------------------------
+_violations = []
 for _t in ["weather_daily_raw", "weather_forecast_raw", "nasa_power_raw", "mandi_prices_raw", "geo_districts"]:
     _missing = missing_columns(_t, bronze(_t).columns)
     if _missing:
-        raise Exception(f"SCHEMA CONTRACT VIOLATION: bronze.{_t} is missing columns {_missing}")
+        _violations.append(f"bronze.{_t} is missing columns {_missing}")
+if _violations:  # report every drifted table at once, then fail the update
+    raise Exception("SCHEMA CONTRACT VIOLATION: " + "; ".join(_violations))
 
 
 def dedupe_latest(df, keys):
@@ -167,14 +172,15 @@ def mandi_prices_daily_flagged():
         bronze("mandi_prices_raw"),
         ["state", "district", "market", "commodity", "variety", "grade", "arrival_date"],
     )
-    nm = spark.read.table(f"{CATALOG}.ops.district_name_map").select(  # noqa: F821
+    nm = spark.read.table(f"{CATALOG}.{OPS}.district_name_map").select(  # noqa: F821
         F.col("src_state").alias("state"), F.col("src_district").alias("district"), "district_id"
     )
     df = (
         m.join(nm, ["state", "district"], "left")
         .select(
             "district_id",
-            F.concat_ws("|", F.col("district_id"), norm_name("market")).alias("market_id"),
+            # concat_ws silently skips NULLs, which let a missing market name pass valid_key (found by the chaos test)
+            F.when(F.col("market").isNotNull() & F.col("district_id").isNotNull(), F.concat_ws("|", F.col("district_id"), norm_name("market"))).alias("market_id"),
             commodity_map_expr("commodity").alias("commodity_std"),
             norm_name("variety").alias("variety_std"),
             F.col("arrival_date").alias("date"),
@@ -186,7 +192,8 @@ def mandi_prices_daily_flagged():
     )  # fmt: skip
     # trailing 30-observation median per market x commodity x variety (excludes the current row)
     w = Window.partitionBy("market_id", "commodity_std", "variety_std").orderBy("date").rowsBetween(-30, -1)
-    df = df.withColumn("rolling_median_price", F.percentile_approx("modal_price_inr_qtl", 0.5).over(w))
+    # median over VALID (positive) prices only: zero/invalid prices in the window made the median 0 and flagged every real price as a spike
+    df = df.withColumn("rolling_median_price", F.percentile_approx(F.when(F.col("modal_price_inr_qtl") > 0, F.col("modal_price_inr_qtl")), 0.5).over(w))
     return with_rule_flags(df, {**MANDI_RULES, **MANDI_WARN_RULES}).withColumn(
         # warn-only rules must not quarantine: keep only hard-rule failures in failed_rules
         "failed_rules", F.array_except("failed_rules", F.array(*[F.lit(k) for k in MANDI_WARN_RULES]))

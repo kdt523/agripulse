@@ -21,3 +21,8 @@ def test_failed_rules_sql_names_every_rule():
 def test_himalayan_winter_is_valid():
     # regression: a -45 C night / -36 C day at a high-altitude centroid must pass temp_range
     assert "-60" in WEATHER_RULES["temp_range"] and "-50" in WEATHER_RULES["temp_range"]
+
+
+def test_spike_and_market_key_rules_exist():
+    assert "price_spike_extreme" in MANDI_RULES and "50 *" in MANDI_RULES["price_spike_extreme"]
+    assert "arrivals_plausible" in MANDI_RULES
