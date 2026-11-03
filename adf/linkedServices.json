@@ -1,0 +1,16 @@
+[
+  {
+    "name": "ls_datagov_rest",
+    "properties": {
+      "type": "RestService",
+      "typeProperties": { "url": "https://api.data.gov.in/", "enableServerCertificateValidation": true, "authenticationType": "Anonymous" }
+    }
+  },
+  {
+    "name": "ls_adls_agripulse",
+    "properties": {
+      "type": "AzureBlobFS",
+      "typeProperties": { "url": "https://<storage-account>.dfs.core.windows.net" }
+    }
+  }
+]

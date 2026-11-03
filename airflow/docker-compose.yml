@@ -1,0 +1,36 @@
+# Local Airflow (LocalExecutor) that triggers the Databricks workflow `agripulse_daily`.
+# Databricks Workflows is the primary orchestrator; Airflow demonstrates cross-tool orchestration.
+#   cd airflow && cp .env.example .env   # fill DATABRICKS_TOKEN and AGRIPULSE_JOB_ID
+#   docker compose up airflow-init && docker compose up -d     # UI: http://localhost:8080 (airflow/airflow)
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3-python3.11
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-databricks==6.8.0 requests
+    AIRFLOW_CONN_DATABRICKS_DEFAULT: '{"conn_type":"databricks","host":"${DATABRICKS_HOST}","password":"${DATABRICKS_TOKEN}"}'
+    AGRIPULSE_JOB_ID: ${AGRIPULSE_JOB_ID}
+    AGRIPULSE_SQL_WAREHOUSE_ID: ${AGRIPULSE_SQL_WAREHOUSE_ID}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:15
+    environment: { POSTGRES_USER: airflow, POSTGRES_PASSWORD: airflow, POSTGRES_DB: airflow }
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "airflow"], interval: 5s, retries: 10 }
+  airflow-init:
+    <<: *airflow-common
+    command: bash -c "airflow db migrate && airflow users create --username airflow --password airflow --firstname a --lastname b --role Admin --email a@b.c"
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports: ["8080:8080"]
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler

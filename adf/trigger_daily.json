@@ -1,0 +1,13 @@
+{
+  "name": "tr_daily_0600_ist",
+  "properties": {
+    "type": "ScheduleTrigger",
+    "typeProperties": { "recurrence": { "frequency": "Day", "interval": 1, "startTime": "2026-11-05T00:30:00Z", "timeZone": "UTC" } },
+    "pipelines": [
+      {
+        "pipelineReference": { "referenceName": "pl_agmarknet_copy", "type": "PipelineReference" },
+        "parameters": { "run_date": "@formatDateTime(trigger().scheduledTime,'yyyy-MM-dd')", "commodity": "Wheat" }
+      }
+    ]
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "name": "pl_agmarknet_copy",
+  "properties": {
+    "description": "Daily copy of Agmarknet mandi prices (data.gov.in REST) to ADLS Gen2 raw/agmarknet/dt=<date>/ as CSV, then trigger the Databricks workflow. Needed because api.data.gov.in is not reachable from Databricks Free Edition serverless.",
+    "parameters": {
+      "run_date": { "type": "String", "defaultValue": "2026-11-04" },
+      "commodity": { "type": "String", "defaultValue": "Wheat" }
+    },
+    "activities": [
+      {
+        "name": "copy_agmarknet_to_adls",
+        "type": "Copy",
+        "typeProperties": {
+          "source": {
+            "type": "RestSource",
+            "httpRequestTimeout": "00:02:00",
+            "requestMethod": "GET",
+            "paginationRules": { "QueryParameters.offset": "RANGE:0:100000:1000" }
+          },
+          "sink": {
+            "type": "DelimitedTextSink",
+            "storeSettings": { "type": "AzureBlobFSWriteSettings" },
+            "formatSettings": { "type": "DelimitedTextWriteSettings", "quoteAllText": true, "fileExtension": ".csv" }
+          },
+          "translator": {
+            "type": "TabularTranslator",
+            "collectionReference": "$['records']",
+            "mappings": [
+              { "source": { "path": "$['state']" }, "sink": { "name": "State" } },
+              { "source": { "path": "$['district']" }, "sink": { "name": "District" } },
+              { "source": { "path": "$['market']" }, "sink": { "name": "Market" } },
+              { "source": { "path": "$['commodity']" }, "sink": { "name": "Commodity" } },
+              { "source": { "path": "$['variety']" }, "sink": { "name": "Variety" } },
+              { "source": { "path": "$['grade']" }, "sink": { "name": "Grade" } },
+              { "source": { "path": "$['arrival_date']" }, "sink": { "name": "Arrival_Date" } },
+              { "source": { "path": "$['min_price']" }, "sink": { "name": "Min_Price" } },
+              { "source": { "path": "$['max_price']" }, "sink": { "name": "Max_Price" } },
+              { "source": { "path": "$['modal_price']" }, "sink": { "name": "Modal_Price" } }
+            ]
+          }
+        },
+        "inputs": [
+          { "referenceName": "ds_datagov_agmarknet", "type": "DatasetReference", "parameters": { "commodity": "@pipeline().parameters.commodity" } }
+        ],
+        "outputs": [
+          { "referenceName": "ds_adls_raw_agmarknet", "type": "DatasetReference", "parameters": { "run_date": "@pipeline().parameters.run_date" } }
+        ]
+      },
+      {
+        "name": "trigger_databricks_workflow",
+        "type": "WebActivity",
+        "dependsOn": [ { "activity": "copy_agmarknet_to_adls", "dependencyConditions": [ "Succeeded" ] } ],
+        "typeProperties": {
+          "url": "https://dbc-84ec4a82-30b0.cloud.databricks.com/api/2.1/jobs/run-now",
+          "method": "POST",
+          "headers": { "Content-Type": "application/json" },
+          "authentication": { "type": "Basic", "username": "token", "password": { "type": "AzureKeyVaultSecret", "secretName": "databricks-token" } },
+          "body": { "job_id": "<agripulse_daily job id>" }
+        }
+      }
+    ]
+  }
+}

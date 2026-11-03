@@ -79,6 +79,152 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               mode: "{{job.parameters.mode}}"
+    agripulse_daily:
+      name: agripulse_daily_${bundle.target}
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      schedule:
+        quartz_cron_expression: ${var.schedule}
+        timezone_id: Asia/Kolkata
+        pause_status: UNPAUSED
+      email_notifications:
+        on_failure:
+          - ${var.alert_email}
+      tasks:
+        - task_key: geo_gate
+          condition_task:
+            op: EQUAL_TO
+            left: "{{job.start_time.iso_weekday}}"
+            right: "1"
+        - task_key: ingest_geo
+          depends_on: [{ task_key: geo_gate, outcome: "true" }]
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters: { catalog: "${var.catalog}", source: geo, mode: incremental }
+        - task_key: ingest_weather
+          depends_on: [{ task_key: ingest_geo }]
+          run_if: NONE_FAILED
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          timeout_seconds: 14400
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters: { catalog: "${var.catalog}", source: weather, mode: catchup }
+        - task_key: ingest_nasa
+          depends_on: [{ task_key: ingest_geo }]
+          run_if: NONE_FAILED
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters: { catalog: "${var.catalog}", source: nasa_power, mode: incremental }
+        - task_key: ingest_forecast
+          depends_on: [{ task_key: ingest_geo }]
+          run_if: NONE_FAILED
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          timeout_seconds: 3600
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters: { catalog: "${var.catalog}", source: forecast, mode: incremental }
+        - task_key: ingest_mandi
+          depends_on: [{ task_key: ingest_geo }]
+          run_if: NONE_FAILED
+          max_retries: 2
+          min_retry_interval_millis: 60000
+          timeout_seconds: 3600
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters: { catalog: "${var.catalog}", source: mandi_landing, mode: incremental }
+        - task_key: name_map
+          depends_on: [{ task_key: ingest_mandi }]
+          notebook_task:
+            notebook_path: ../notebooks/20_name_map.py
+            base_parameters: { catalog: "${var.catalog}" }
+        - task_key: silver_pipeline
+          depends_on:
+            - { task_key: ingest_weather }
+            - { task_key: ingest_nasa }
+            - { task_key: ingest_forecast }
+            - { task_key: name_map }
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.agripulse_silver.id}
+        - task_key: gold_build
+          depends_on: [{ task_key: silver_pipeline }]
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ../notebooks/40_gold.py
+            base_parameters: { catalog: "${var.catalog}", mode: incremental }
+        - task_key: dq_scorecard
+          depends_on: [{ task_key: gold_build }]
+          notebook_task:
+            notebook_path: ../notebooks/30_scorecard.py
+            base_parameters: { catalog: "${var.catalog}" }
+        - task_key: freshness_check
+          depends_on: [{ task_key: dq_scorecard }]
+          notebook_task:
+            notebook_path: ../notebooks/60_freshness.py
+            base_parameters:
+              catalog: "${var.catalog}"
+              run_url: "${workspace.host}/jobs/{{job.id}}/runs/{{job.run_id}}"
+    agripulse_freshness:
+      name: agripulse_freshness_${bundle.target}
+      parameters:
+        - { name: sla_override, default: "" }
+      tasks:
+        - task_key: freshness
+          notebook_task:
+            notebook_path: ../notebooks/60_freshness.py
+            base_parameters:
+              catalog: ${var.catalog}
+              sla_override: "{{job.parameters.sla_override}}"
+              run_url: "${workspace.host}/jobs"
+    agripulse_catalog:
+      name: agripulse_catalog_${bundle.target}
+      parameters:
+        - { name: write_markdown_to, default: "" }
+      tasks:
+        - task_key: catalog
+          notebook_task:
+            notebook_path: ../notebooks/50_catalog.py
+            base_parameters:
+              catalog: ${var.catalog}
+              write_markdown_to: "{{job.parameters.write_markdown_to}}"
+    agripulse_ml:
+      name: agripulse_ml_${bundle.target}
+      tasks:
+        - task_key: forecast_lift
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ../notebooks/70_ml_forecast.py
+            base_parameters: { catalog: "${var.catalog}" }
+        - task_key: segmentation
+          notebook_task:
+            notebook_path: ../notebooks/71_ml_segmentation.py
+            base_parameters: { catalog: "${var.catalog}" }
+    agripulse_chaos:
+      name: agripulse_chaos_${bundle.target}
+      parameters:
+        - { name: label, default: before }
+      tasks:
+        - task_key: chaos
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ../notebooks/80_chaos.py
+            base_parameters:
+              catalog: ${var.catalog}
+              label: "{{job.parameters.label}}"
+              pipeline_id: ${resources.pipelines.agripulse_silver_chaos.id}
+    agripulse_benchmarks:
+      name: agripulse_benchmarks_${bundle.target}
+      tasks:
+        - task_key: bench
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ../notebooks/90_benchmarks.py
+            base_parameters: { catalog: "${var.catalog}" }
     agripulse_probe:
       name: agripulse_probe_${bundle.target}
       tasks:

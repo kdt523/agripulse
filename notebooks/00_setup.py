@@ -61,9 +61,13 @@ CREATE TABLE IF NOT EXISTS {catalog}.ops.freshness_sla (
 spark.sql(f"""
 MERGE INTO {catalog}.ops.freshness_sla t
 USING (SELECT * FROM VALUES
-  ('weather', 1, 'kd'), ('nasa_power', 3, 'kd'), ('mandi', 2, 'kd'), ('forecast', 0, 'kd')
+  ('weather', 3, 'kd'),     -- ERA5 archive lags ~2d, +1d grace
+  ('nasa_power', 5, 'kd'),  -- POWER lags ~4d, +1d grace
+  ('forecast', 1, 'kd'),
+  ('mandi', CAST(NULL AS INT), 'kd')  -- static public archive (ends 2017-06); NULL = never breaches
   AS s(source, expected_lag_days, owner)) s
 ON t.source = s.source
+WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *
 """)  # noqa: F821
 

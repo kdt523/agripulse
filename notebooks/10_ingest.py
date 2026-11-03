@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath("../src"))
 
 dbutils.widgets.text("catalog", "agripulse")  # noqa: F821
 dbutils.widgets.dropdown(  # noqa: F821
-    "source", "geo", ["geo", "weather", "forecast", "nasa_power", "mandi_csv", "mandi_archive", "mandi_api", "crop_csv"]
+    "source", "geo", ["geo", "weather", "forecast", "nasa_power", "mandi_csv", "mandi_landing", "mandi_archive", "mandi_api", "crop_csv"]
 )
 dbutils.widgets.dropdown("mode", "incremental", ["incremental", "backfill", "catchup"])  # noqa: F821
 dbutils.widgets.text("start", "")  # noqa: F821
@@ -69,6 +69,22 @@ elif src == "mandi_archive":  # public 2008-2017 archive; start/end are YEARS he
     with logged_run(spark, "mandi_archive", "bronze", settings) as rec:
         result = load_mandi_archive(spark, settings.landing_root, ARCHIVE_CROPS, years, settings)
         rec.rows_in, rec.rows_out = result["rows_in"], result["inserted"]
+elif src == "mandi_landing":  # ADF / manual drops: /Volumes/<cat>/bronze/landing/mandi_incoming/*.csv
+    import shutil
+
+    from agripulse.ingest.agmarknet import load_mandi_csv
+
+    inbox = os.path.join(settings.landing_root, "mandi_incoming")
+    os.makedirs(os.path.join(inbox, "processed"), exist_ok=True)
+    files = [f for f in os.listdir(inbox) if f.endswith(".csv")]
+    if not files:
+        result = {"rows_in": 0, "inserted": 0, "note": "no new files"}
+    else:
+        with logged_run(spark, "mandi_landing", "bronze", settings) as rec:
+            result = load_mandi_csv(spark, os.path.join(inbox, "*.csv"), settings, settings.commodities)
+            rec.rows_in, rec.rows_out = result["rows_in"], result["inserted"]
+        for f in files:
+            shutil.move(os.path.join(inbox, f), os.path.join(inbox, "processed", f))
 elif src == "mandi_csv":
     from agripulse.ingest.agmarknet import load_mandi_csv
 
