@@ -28,6 +28,7 @@ jobs:
           path: coverage.xml
 
   bundle-validate:
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }} # needs DATABRICKS_HOST / DATABRICKS_TOKEN secrets
     runs-on: ubuntu-latest
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

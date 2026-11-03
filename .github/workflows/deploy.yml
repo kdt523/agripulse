@@ -9,6 +9,7 @@ concurrency:
 
 jobs:
   deploy-dev:
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }} # set the repo variable ENABLE_DEPLOY=true after adding the Databricks secrets
     runs-on: ubuntu-latest
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -31,6 +32,7 @@ jobs:
           diff -q /tmp/DATA_CATALOG.md docs/DATA_CATALOG.md || (echo "docs/DATA_CATALOG.md is stale: regenerate and commit it" && exit 1)
 
   deploy-prod:
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }}
     needs: deploy-dev
     runs-on: ubuntu-latest
     environment: production # configure required reviewers on this environment = manual approval gate
