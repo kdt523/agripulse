@@ -47,9 +47,11 @@ class OpenMeteoArchiveIngestor(BaseIngestor):
     keys = ["district_id", "date"]
     cluster_by = ["district_id", "date"]
     lag_days = 2  # ERA5 archive lags ~2 days
-    default_start = date(2020, 1, 1)
+    # Free-tier quota (~10k weighted calls/day) fits ~6 months x 641 districts per day; NASA POWER holds the
+    # 5-year history (see docs/runbook.md). Catch-up extends this as quota allows.
+    default_start = date(2026, 5, 1)
 
-    def __init__(self, spark, districts: list[dict], batch_size: int = 25, chunk_days: int = 366,
+    def __init__(self, spark, districts: list[dict], batch_size: int = 10, chunk_days: int = 366,
                  workers: int = 3, settings: Settings | None = None, landing_root: str | None = None,
                  client: HttpClient | None = None):  # fmt: skip
         super().__init__(spark, settings, landing_root)
@@ -86,6 +88,54 @@ class OpenMeteoArchiveIngestor(BaseIngestor):
         from pyspark.sql import functions as F
 
         return df.withColumn("date", F.to_date("date"))
+
+    # ---- quota-aware, resumable catch-up --------------------------------------------------------
+    @staticmethod
+    def request_weight(n_locations: int, n_days: int) -> float:
+        """Open-Meteo bills locations x max(1, days/14) (variables < 10 add nothing)."""
+        return n_locations * max(1.0, n_days / 14.0)
+
+    def run_catchup(self, end: date | None = None, daily_budget: float = 9000.0,
+                    weight_per_hour: float = 4500.0, max_runtime_s: float = 3.2 * 3600) -> dict:  # fmt: skip
+        """Per-district watermarks (ops.ingest_watermarks key=district_id). Each call pulls as many
+        (batch x year) requests as the free-tier budget allows, then stops; the next call resumes.
+        Throttles to stay under the hourly weight cap. Safe to re-run: MERGE is idempotent."""
+        import time
+
+        from agripulse.common.delta_io import district_watermarks, set_district_watermarks
+        from agripulse.ingest.windows import plan_catchup
+
+        t0 = time.monotonic()
+        target = end or (date.today() - timedelta(days=self.lag_days))
+        wms = district_watermarks(self.spark, self.source, self.settings)
+        plan = plan_catchup([d["district_id"] for d in self.districts], wms, target, self.default_start,
+                            self.batch_size, self.chunk_days)  # fmt: skip
+        by_id = {d["district_id"]: d for d in self.districts}
+        all_ids = list(by_id)
+        total_planned = len(plan)
+        spent, requests_done, rows_in, inserted = 0.0, 0, 0, 0
+        while plan:
+            ids, cs, ce = plan[0]
+            weight = self.request_weight(len(ids), (ce - cs).days + 1)
+            if spent + weight > daily_budget or time.monotonic() - t0 > max_runtime_s:
+                break
+            batch = [by_id[i] for i in ids]
+            rows = self._one(batch, cs, ce)
+            path = self.land(rows, cs, ce)
+            res = self.load_bronze(path) if path else {"rows_in": 0, "inserted": 0}
+            set_district_watermarks(self.spark, self.source, ids, ce, self.settings)
+            spent += weight
+            requests_done += 1
+            rows_in += res["rows_in"]
+            inserted += res["inserted"]
+            for i in ids:
+                wms[i] = ce
+            plan = plan_catchup(all_ids, wms, target, self.default_start, self.batch_size, self.chunk_days)
+            time.sleep(weight / weight_per_hour * 3600.0)  # honour the hourly cap
+        pending = {i for i in all_ids if wms.get(i) is None or wms[i] < target}
+        return {"requests": requests_done, "weight_spent": round(spent, 1), "rows_in": rows_in,
+                "inserted": inserted, "districts_pending": len(pending), "districts_total": len(all_ids),
+                "initial_plan_requests": total_planned, "target": target.isoformat()}  # fmt: skip
 
 
 class OpenMeteoForecastIngestor(OpenMeteoArchiveIngestor):

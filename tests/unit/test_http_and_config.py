@@ -2,14 +2,15 @@ import pytest
 import requests
 
 from agripulse.common.config import get_settings
-from agripulse.common.http import HttpClient, RetryableHTTPError
+from agripulse.common.http import DailyQuotaExceeded, HttpClient, RetryableHTTPError
 from agripulse.common.runlog import RunRecord
 
 
 class FakeResp:
-    def __init__(self, status, payload=None):
+    def __init__(self, status, payload=None, text=""):
         self.status_code = status
         self._payload = payload or {}
+        self.text = text
 
     def json(self):
         return self._payload
@@ -65,3 +66,10 @@ def test_client_error_not_retried():
 def test_run_record_row_shape():
     r = RunRecord(source="weather", layer="bronze")
     assert len(r.as_row()) == 10
+
+
+def test_daily_quota_not_retried():
+    c = _client([FakeResp(429, text="Daily API request limit exceeded")])
+    with pytest.raises(DailyQuotaExceeded):
+        c.get_json("http://x")
+    assert c.session.calls == 1

@@ -33,6 +33,34 @@ def resolve_window(
     return (s, e) if s <= e else None
 
 
+def plan_catchup(
+    district_ids: list[str],
+    watermarks: dict[str, date],
+    target: date,
+    default_start: date,
+    batch_size: int,
+    chunk_days: int,
+) -> list[tuple[list[str], date, date]]:
+    """Work list of (district batch, chunk_start, chunk_end) still missing up to `target`.
+
+    Districts sharing the same resume date are batched together, oldest data first, so a
+    budget-limited run always leaves a consistent, resumable state.
+    """
+    groups: dict[date, list[str]] = {}
+    for did in sorted(district_ids):
+        wm = watermarks.get(did)
+        start = wm + timedelta(days=1) if wm else default_start
+        if start <= target:
+            groups.setdefault(start, []).append(did)
+    plan: list[tuple[list[str], date, date]] = []
+    for start in sorted(groups):
+        ids = groups[start]
+        for i in range(0, len(ids), batch_size):
+            batch = ids[i : i + batch_size]
+            plan.append((batch, *chunk_dates(start, target, chunk_days)[0]))
+    return plan
+
+
 def chunk_dates(start: date, end: date, days: int) -> list[tuple[date, date]]:
     """Split [start, end] into consecutive inclusive chunks of at most `days` days."""
     out, cur = [], start

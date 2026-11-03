@@ -8,6 +8,7 @@ Two paths, same bronze contract:
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date, datetime
 from typing import Any
@@ -36,7 +37,7 @@ CANONICAL = [
     "arrival_date", "min_price", "max_price", "modal_price", "arrivals_tonnes",
 ]  # fmt: skip
 
-DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%m/%d/%Y")
+DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d-%b-%Y", "%d %b %Y", "%m/%d/%Y")
 
 
 def _norm(h: str) -> str:
@@ -121,13 +122,9 @@ class AgmarknetIngestor(BaseIngestor):
 
 def load_mandi_csv(spark, path: str, settings: Settings | None = None, commodities: list[str] | None = None) -> dict:
     """Historical CSV dump(s) in the Volume -> canonical rows -> MERGE into bronze.mandi_prices_raw."""
-    import uuid
-    from datetime import timezone
-
     from pyspark.sql import functions as F
 
     from agripulse.common.config import get_settings
-    from agripulse.common.delta_io import merge_into
 
     s = settings or get_settings()
     df = spark.read.option("header", True).csv(path)
@@ -140,6 +137,18 @@ def load_mandi_csv(spark, path: str, settings: Settings | None = None, commoditi
     for c in CANONICAL:
         sel.append(F.col(f"`{seen[c]}`").alias(c) if c in seen else F.lit(None).cast("string").alias(c))
     df = df.select(*sel)
+
+    return _standardise_and_merge(spark, df, s, "agmarknet_csv", path, commodities)
+
+
+def _standardise_and_merge(spark, df, s, source: str, request_params: str, commodities: list[str] | None = None) -> dict:
+    """df has canonical string columns -> typed bronze rows -> MERGE (shared by CSV and archive loaders)."""
+    import uuid
+    from datetime import timezone
+
+    from pyspark.sql import functions as F
+
+    from agripulse.common.delta_io import merge_into
 
     def spark_fmt(f: str) -> str:
         return f.replace("%d", "dd").replace("%m", "MM").replace("%Y", "yyyy").replace("%b", "MMM")
@@ -154,8 +163,58 @@ def load_mandi_csv(spark, path: str, settings: Settings | None = None, commoditi
         df = df.filter(F.col("commodity").isin(commodities))
     df = (
         df.withColumn("_ingested_at", F.lit(datetime.now(timezone.utc)).cast("timestamp"))
-        .withColumn("_source", F.lit("agmarknet_csv"))
+        .withColumn("_source", F.lit(source))
         .withColumn("_run_id", F.lit(uuid.uuid4().hex))
-        .withColumn("_request_params", F.lit(path))
+        .withColumn("_request_params", F.lit(request_params))
     )
     return merge_into(spark, df, s.table("bronze", "mandi_prices_raw"), AgmarknetIngestor.keys, ["arrival_date"])
+
+
+# ---- public historical archive (iancovert/Agmarknet, 2008-Jun 2017): one headerless CSV per crop-year ------------
+ARCHIVE_BASE = "https://raw.githubusercontent.com/iancovert/Agmarknet/master"
+ARCHIVE_COLUMNS = ["state", "district", "market", "variety", "group", "arrivals_tonnes",
+                   "min_price", "max_price", "modal_price", "arrival_date"]  # fmt: skip
+ARCHIVE_CROPS = ["Maize", "Rice", "Soyabean", "Wheat", "Arhar (Tur-Red Gram)", "Green Gram (Moong)"]
+
+
+def download_archive(landing_root: str, crops: list[str], years: list[int], client: HttpClient | None = None) -> list[str]:
+    """Download crop-year CSVs into the landing volume (replayable). Returns local paths."""
+    import os
+    from urllib.parse import quote
+
+    client = client or HttpClient()
+    out = []
+    for crop in crops:
+        folder = os.path.join(landing_root, "mandi_archive", crop)
+        os.makedirs(folder, exist_ok=True)
+        for y in years:
+            dest = os.path.join(folder, f"{y}.csv")
+            if not os.path.exists(dest):
+                try:
+                    text = client.get_text(f"{ARCHIVE_BASE}/{quote(crop)}/{y}.csv")
+                except Exception:  # not every crop has every year (e.g. White Peas)
+                    continue
+                with open(dest, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            out.append(dest)
+    return out
+
+
+def load_mandi_archive(spark, landing_root: str, crops: list[str], years: list[int], settings: Settings | None = None) -> dict:
+    from pyspark.sql import functions as F
+
+    from agripulse.common.config import get_settings
+
+    s = settings or get_settings()
+    paths = download_archive(landing_root, crops, years)
+    schema = ", ".join(f"{c} string" for c in ARCHIVE_COLUMNS)
+    df = None
+    for crop in crops:
+        crop_paths = [p for p in paths if f"mandi_archive{os.sep}{crop}{os.sep}" in p]
+        if not crop_paths:
+            continue
+        part = spark.read.schema(schema).option("header", False).csv(crop_paths).withColumn("commodity", F.lit(crop))
+        df = part if df is None else df.unionByName(part)
+    df = df.withColumn("grade", F.col("group")).select(*CANONICAL)
+    params = f"iancovert/Agmarknet {','.join(crops)} {years[0]}-{years[-1]}"
+    return _standardise_and_merge(spark, df, s, "agmarknet_archive", params)

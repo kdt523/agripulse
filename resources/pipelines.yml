@@ -1,0 +1,16 @@
+resources:
+  pipelines:
+    agripulse_silver:
+      name: agripulse_silver_${bundle.target}
+      serverless: true
+      catalog: ${var.catalog}
+      schema: silver
+      channel: CURRENT
+      continuous: false
+      development: true
+      libraries:
+        - file:
+            path: ../pipelines/dlt_silver.py
+      configuration:
+        agripulse.catalog: ${var.catalog}
+        agripulse.src_path: ${workspace.file_path}/src

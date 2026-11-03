@@ -74,3 +74,31 @@ def set_watermark(spark, source: str, last_date: date, key: str = "global", sett
         f"MERGE INTO {tbl} t USING _wm_src s ON t.source = s.source AND t.key = s.key "
         "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
     )
+
+
+def district_watermarks(spark, source: str, settings: Settings | None = None) -> dict[str, date]:
+    """Per-district watermarks: ops.ingest_watermarks rows where key is a district_id (D####)."""
+    s = settings or get_settings()
+    rows = spark.sql(
+        f"SELECT key, last_date FROM {s.table('ops', 'ingest_watermarks')} "
+        f"WHERE source = '{source}' AND key LIKE 'D%'"
+    ).collect()
+    return {r["key"]: r["last_date"] for r in rows}
+
+
+def set_district_watermarks(spark, source: str, district_ids: list[str], last_date: date,
+                            settings: Settings | None = None) -> None:  # fmt: skip
+    """Advance (never regress) watermarks for many districts with one MERGE."""
+    s = settings or get_settings()
+    tbl = s.table("ops", "ingest_watermarks")
+    now = datetime.now(timezone.utc)
+    df = spark.createDataFrame(
+        [(source, d, last_date, now) for d in district_ids],
+        "source string, key string, last_date date, updated_at timestamp",
+    )
+    df.createOrReplaceTempView("_dwm_src")
+    spark.sql(
+        f"MERGE INTO {tbl} t USING _dwm_src s ON t.source = s.source AND t.key = s.key "
+        "WHEN MATCHED AND s.last_date > t.last_date THEN UPDATE SET * "
+        "WHEN NOT MATCHED THEN INSERT *"
+    )

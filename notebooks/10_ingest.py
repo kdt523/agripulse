@@ -18,9 +18,9 @@ sys.path.insert(0, os.path.abspath("../src"))
 
 dbutils.widgets.text("catalog", "agripulse")  # noqa: F821
 dbutils.widgets.dropdown(  # noqa: F821
-    "source", "geo", ["geo", "weather", "forecast", "nasa_power", "mandi_csv", "mandi_api", "crop_csv"]
+    "source", "geo", ["geo", "weather", "forecast", "nasa_power", "mandi_csv", "mandi_archive", "mandi_api", "crop_csv"]
 )
-dbutils.widgets.dropdown("mode", "incremental", ["incremental", "backfill"])  # noqa: F821
+dbutils.widgets.dropdown("mode", "incremental", ["incremental", "backfill", "catchup"])  # noqa: F821
 dbutils.widgets.text("start", "")  # noqa: F821
 dbutils.widgets.text("end", "")  # noqa: F821
 dbutils.widgets.text("n_districts", "0")  # noqa: F821
@@ -62,6 +62,13 @@ elif src == "crop_csv":
     with logged_run(spark, "crop_area", "bronze", settings) as rec:  # noqa: F821
         result = load_crop_area_csv(spark, W["path"], settings)  # noqa: F821
         rec.rows_in, rec.rows_out = result["rows_in"], result["inserted"]
+elif src == "mandi_archive":  # public 2008-2017 archive; start/end are YEARS here (e.g. 2013 / 2017)
+    from agripulse.ingest.agmarknet import ARCHIVE_CROPS, load_mandi_archive
+
+    years = list(range(int(W["start"] or 2013), int(W["end"] or 2017) + 1))
+    with logged_run(spark, "mandi_archive", "bronze", settings) as rec:
+        result = load_mandi_archive(spark, settings.landing_root, ARCHIVE_CROPS, years, settings)
+        rec.rows_in, rec.rows_out = result["rows_in"], result["inserted"]
 elif src == "mandi_csv":
     from agripulse.ingest.agmarknet import load_mandi_csv
 
@@ -78,7 +85,10 @@ else:
     else:
         from agripulse.ingest.agmarknet import AgmarknetIngestor as Cls
     ing = Cls(spark, settings=settings) if src == "mandi_api" else Cls(spark, load_districts(), settings=settings)  # noqa: F821
-    result = ing.run(W["mode"], _d(W["start"]), _d(W["end"]))
+    if W["mode"] == "catchup":  # quota-aware, resumable, per-district (Open-Meteo archive only)
+        result = ing.run_catchup(end=_d(W["end"]))
+    else:
+        result = ing.run(W["mode"], _d(W["start"]), _d(W["end"]))
 
 print(result)
 dbutils.notebook.exit(json.dumps(result, default=str))  # noqa: F821

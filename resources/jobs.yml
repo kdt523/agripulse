@@ -26,6 +26,59 @@ resources:
               n_districts: "{{job.parameters.n_districts}}"
               district_offset: "{{job.parameters.district_offset}}"
               path: "{{job.parameters.path}}"
+    agripulse_ingest_long:
+      name: agripulse_ingest_long_${bundle.target}
+      max_concurrent_runs: 1
+      parameters:
+        - { name: source, default: geo }
+        - { name: mode, default: incremental }
+        - { name: start, default: "" }
+        - { name: end, default: "" }
+        - { name: n_districts, default: "0" }
+        - { name: district_offset, default: "0" }
+        - { name: path, default: "" }
+      tasks:
+        - task_key: ingest
+          timeout_seconds: 14400
+          notebook_task:
+            notebook_path: ../notebooks/10_ingest.py
+            base_parameters:
+              catalog: ${var.catalog}
+              source: "{{job.parameters.source}}"
+              mode: "{{job.parameters.mode}}"
+              start: "{{job.parameters.start}}"
+              end: "{{job.parameters.end}}"
+              n_districts: "{{job.parameters.n_districts}}"
+              district_offset: "{{job.parameters.district_offset}}"
+              path: "{{job.parameters.path}}"
+    agripulse_name_map:
+      name: agripulse_name_map_${bundle.target}
+      tasks:
+        - task_key: name_map
+          notebook_task:
+            notebook_path: ../notebooks/20_name_map.py
+            base_parameters:
+              catalog: ${var.catalog}
+    agripulse_scorecard:
+      name: agripulse_scorecard_${bundle.target}
+      tasks:
+        - task_key: scorecard
+          notebook_task:
+            notebook_path: ../notebooks/30_scorecard.py
+            base_parameters:
+              catalog: ${var.catalog}
+    agripulse_gold:
+      name: agripulse_gold_${bundle.target}
+      parameters:
+        - { name: mode, default: full }
+      tasks:
+        - task_key: gold
+          timeout_seconds: 7200
+          notebook_task:
+            notebook_path: ../notebooks/40_gold.py
+            base_parameters:
+              catalog: ${var.catalog}
+              mode: "{{job.parameters.mode}}"
     agripulse_probe:
       name: agripulse_probe_${bundle.target}
       tasks:

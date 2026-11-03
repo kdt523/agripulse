@@ -21,6 +21,10 @@ class RetryableHTTPError(Exception):
     """Raised for 429/5xx so tenacity retries."""
 
 
+class DailyQuotaExceeded(Exception):
+    """Daily API quota is gone; retrying within the day is pointless, so this is NOT retried."""
+
+
 class HttpClient:
     def __init__(self, settings: Settings | None = None, session: requests.Session | None = None):
         self.settings = settings or get_settings()
@@ -46,6 +50,8 @@ class HttpClient:
         def _call() -> Any:
             self._throttle()
             resp = self.session.get(url, params=params, timeout=self.settings.http_timeout_s)
+            if resp.status_code == 429 and "daily" in resp.text.lower():
+                raise DailyQuotaExceeded(f"daily quota exhausted for {url}: {resp.text[:200]}")
             if resp.status_code == 429 or resp.status_code >= 500:
                 raise RetryableHTTPError(f"{resp.status_code} from {url}")
             resp.raise_for_status()

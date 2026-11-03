@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agripulse.ingest import agmarknet, geo, nasa_power, openmeteo
-from agripulse.ingest.windows import chunk_dates, resolve_window
+from agripulse.ingest.windows import chunk_dates, plan_catchup, resolve_window
 
 FX = Path(__file__).parent.parent / "fixtures"
 
@@ -79,3 +79,22 @@ def test_chunk_dates_covers_range_without_overlap():
     assert ch[0][0] == date(2020, 1, 1) and ch[-1][1] == date(2022, 12, 31)
     for (_, e), (s, _) in zip(ch, ch[1:], strict=False):
         assert (s - e).days == 1
+
+
+def test_plan_catchup_resumes_oldest_first_and_batches():
+    ids = [f"D{i:04d}" for i in range(1, 6)]
+    wms = {"D0001": date(2022, 12, 31), "D0002": date(2022, 12, 31)}
+    plan = plan_catchup(ids, wms, date(2024, 6, 30), date(2020, 1, 1), batch_size=2, chunk_days=366)
+    # untouched districts (start 2020-01-01) come first, in batches of 2; resumed ones start 2023-01-01
+    assert plan[0] == (["D0003", "D0004"], date(2020, 1, 1), date(2020, 12, 31))
+    assert plan[1] == (["D0005"], date(2020, 1, 1), date(2020, 12, 31))
+    assert plan[2][0] == ["D0001", "D0002"] and plan[2][1] == date(2023, 1, 1)
+
+
+def test_plan_catchup_empty_when_up_to_date():
+    assert plan_catchup(["D0001"], {"D0001": date(2024, 6, 30)}, date(2024, 6, 30), date(2020, 1, 1), 10, 366) == []
+
+
+def test_archive_date_format_and_columns():
+    assert agmarknet.parse_date("01 Jan 2016") == "2016-01-01"
+    assert agmarknet.ARCHIVE_COLUMNS[-1] == "arrival_date" and len(agmarknet.ARCHIVE_COLUMNS) == 10

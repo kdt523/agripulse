@@ -12,7 +12,7 @@ from agripulse.common.config import Settings
 from agripulse.common.http import HttpClient
 from agripulse.ingest.base import BaseIngestor
 
-PARAMS = ["ALLSKY_SFC_SW_DWN", "GWETROOT", "GWETTOP", "T2M", "PRECTOTCORR", "RH2M"]
+PARAMS = ["ALLSKY_SFC_SW_DWN", "GWETROOT", "GWETTOP", "T2M", "T2M_MAX", "T2M_MIN", "PRECTOTCORR", "RH2M", "WS10M"]
 
 
 def parse_response(payload: dict, district_id: str) -> list[dict]:
@@ -34,7 +34,7 @@ class NasaPowerIngestor(BaseIngestor):
     keys = ["district_id", "date"]
     cluster_by = ["district_id", "date"]
     lag_days = 4  # POWER lags real time by a few days
-    default_start = date(2020, 1, 1)
+    default_start = date(2021, 1, 1)
 
     def __init__(self, spark, districts: list[dict], workers: int = 4, settings: Settings | None = None,
                  landing_root: str | None = None, client: HttpClient | None = None):  # fmt: skip
