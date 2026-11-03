@@ -43,7 +43,8 @@ spark.sql(f"""
 CREATE OR REPLACE VIEW {catalog}.gold.v_ds_training
 COMMENT 'Training view for the forecast-lift experiment: features at week t plus next-week arrivals/price as targets'
 AS
-SELECT f.*, n.arrivals_t_sum AS target_arrivals_next_week, n.modal_price_avg AS target_price_next_week
+SELECT f.*, n.arrivals_t_sum AS target_arrivals_next_week, n.modal_price_avg AS target_price_next_week,
+       n.arrivals_lag_52w AS next_week_arrivals_lag_52w
 FROM {catalog}.gold.district_week f
 JOIN {catalog}.gold.district_week n
   ON n.district_id = f.district_id AND n.commodity_std = f.commodity_std AND n.week_start = f.week_start + INTERVAL 7 DAYS
